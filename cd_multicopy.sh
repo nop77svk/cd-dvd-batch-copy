@@ -32,7 +32,7 @@ function ThrowException()
 function infrastructure_check()
 {
 	InfoMessage Checking for proper OS infrastructure
-	( uname -a | grep -Eiq '^cygwin_nt.*\s+cygwim' ) || ThrowException " * Failed: CygWin on Windows NT" \
+	( uname -a | grep -Eiq '^cygwin_nt.*\s+cygwin' ) || ThrowException " * Failed: CygWin on Windows NT" \
 		|| ThrowException " * There are no more options :-("
 }
 
