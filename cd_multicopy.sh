@@ -6,6 +6,8 @@ set -o nounset
 set -o pipefail
 [ -n "${DEBUG:-}" ] && set -x # xtrace
 
+# -------------------------------------------------------------------------------------------------
+
 TARGET_ROOT=/cygdrive/e/cd.copy
 SOURCE_DRIVE_LETTER=W
 
