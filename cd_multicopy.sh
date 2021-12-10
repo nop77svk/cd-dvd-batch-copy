@@ -21,6 +21,21 @@ function InfoMessageNoLF()
 	InfoMessage -n "$@"
 }
 
+function ThrowException()
+{
+	(
+		InfoMessage "$@"
+		false
+	)
+}
+
+function infrastructure_check()
+{
+	InfoMessage Checking for proper OS infrastructure
+	( uname -a | grep -Eiq '^cygwin_nt.*\s+cygwim' ) || ThrowException " * Failed: CygWin on Windows NT" \
+		|| ThrowException " * There are no more options :-("
+}
+
 function eject_cdrom()
 {
 	InfoMessage Insert media into the drive ${SOURCE_DRIVE_LETTER}: tray
@@ -79,6 +94,10 @@ function wait_for_media_inserted()
 
 # -------------------------------------------------------------------------------------------------
 
+if ! infrastructure_check ; then
+	ThrowException "ERROR: This shell script is intended to run on Windows NT w/ CygWin or something similar"
+fi
+
 mkdir ${TARGET_ROOT} || InfoMessage Target root ${TARGET_ROOT} already exists
 
 while true ; do
@@ -107,3 +126,5 @@ while true ; do
 	InfoMessage A short break prior to copying another media
 	sleep 15
 done
+
+:EOF
