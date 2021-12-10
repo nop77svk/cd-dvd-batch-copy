@@ -38,7 +38,7 @@ function infrastructure_check()
 
 function eject_cdrom()
 {
-	InfoMessage Insert media into the drive ${SOURCE_DRIVE_LETTER}: tray
+	InfoMessage "Ejecting media"
 	powershell "(new-object -COM Shell.Application).NameSpace(17).ParseName('${SOURCE_DRIVE_LETTER}:').InvokeVerb('Eject')"
 }
 
@@ -76,7 +76,7 @@ function copy_media()
 	InfoMessage "Copying from $1 to $2"
 	(
 		cd "$1"
-		rsync -ruWP --size-only \
+		rsync -rWP --size-only \
 			. \
 			"$2"
 	)
@@ -84,6 +84,8 @@ function copy_media()
 
 function wait_for_media_inserted()
 {
+	InfoMessage "Insert media into the drive ${SOURCE_DRIVE_LETTER}: tray"
+
 	InfoMessageNoLF "Waiting for media: "
 	while ! is_media_loaded ; do
 		sleep 1
@@ -114,7 +116,7 @@ while true ; do
 	while true ; do
 		copy_media "${l_source_folder}" "${l_target_folder}"
 
-		if source_vs_target_are_the_same "/cygdrive/${SOURCE_DRIVE_LETTER}" "${TARGET_ROOT}/${l_media_volume_info}" ; then
+		if source_vs_target_are_the_same "${l_source_folder}" "${l_target_folder}" ; then
 			break
 		else
 			InfoMessage Retrying
