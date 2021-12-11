@@ -58,7 +58,8 @@ function get_media_volume_info()
 	fi
 }
 
-function source_vs_target_are_the_same()
+# note: unused as of now
+function compare_lists_of_files()
 {
 	InfoMessage "Comparing $1 against $2"
 	l_number_of_differences=$(
@@ -94,6 +95,27 @@ function wait_for_media_inserted()
 	InfoMessage " Loaded"
 }
 
+function calculate_checksum_for()
+{
+	InfoMessage "Calculating checksums for $1"
+	(
+		cd "$1"
+		LC_ALL=en_US.cp1250
+		find . -mindepth 1 -type f,l -exec md5sum -b {} \; | gzip -9c
+	)
+}
+
+function check_checksum_in()
+{
+	InfoMessage "Checking checksums in $1"
+	(
+		cd "$1"
+		LC_ALL=en_US.cp1250
+		gzip -dc .md5sum.gz | md5sum -c \
+			|| ThrowException "Checksum does not match!"
+	)
+}
+
 # -------------------------------------------------------------------------------------------------
 
 if ! infrastructure_check ; then
@@ -116,7 +138,11 @@ while true ; do
 	while true ; do
 		copy_media "${l_source_folder}" "${l_target_folder}"
 
-		if source_vs_target_are_the_same "${l_source_folder}" "${l_target_folder}" ; then
+		if [ ! -f "${l_target_folder}/.md5sum.gz" ] ; then
+			calculate_checksum_for "${l_source_folder}" > "${l_target_folder}/.md5sum.gz"
+		fi
+
+		if check_checksum_in "${l_target_folder}" ; then
 			break
 		else
 			InfoMessage Retrying
