@@ -111,8 +111,13 @@ function check_checksum_in()
 	(
 		cd "$1"
 		LC_ALL=en_US.cp1250
-		gzip -dc .md5sum.gz | md5sum -c \
-			|| ThrowException "Checksum does not match!"
+		if [ -f .md5sum.gz ] ; then
+			gzip -dc .md5sum.gz | md5sum -c \
+				|| ThrowException "Checksum does not match!"
+		else if [ -f .md5sum ] ; then
+			md5sum -c \
+				|| ThrowException "Checksum does not match!"
+		fi ; fi
 	)
 }
 
