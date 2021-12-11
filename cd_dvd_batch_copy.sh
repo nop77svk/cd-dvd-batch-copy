@@ -114,9 +114,13 @@ function check_checksum_in()
 		(
 			if [ -f .md5sum.gz ] ; then
 				gzip -dc .md5sum.gz
+			else if [ -f .md5sum.bz2 ] ; then
+				bzip2 -dc .md5sum.bz2
 			else if [ -f .md5sum ] ; then
 				cat .md5sum
-			fi ; fi
+			else if [ -f .crc-md5sum ] ; then
+				cat .crc-md5sum
+			fi ; fi ; fi ; fi
 		) \
 			| md5sum -c \
 			|| ThrowException "Checksums mismatch!"
@@ -140,12 +144,16 @@ while true ; do
 	l_source_folder="/cygdrive/${SOURCE_DRIVE_LETTER}/"
 	l_target_folder="${TARGET_ROOT}/${l_media_volume_info}"
 
-	mkdir "${l_source_folder}" 2> /dev/null || InfoMessage Target directory already exists
+	mkdir "${l_target_folder}" 2> /dev/null || InfoMessage Target directory already exists
 
 	while true ; do
 		copy_media "${l_source_folder}" "${l_target_folder}"
 
-		if [ ! -f "${l_target_folder}/.md5sum.gz" ] ; then
+		if [ ! -f "${l_target_folder}/.md5sum.gz" \
+			-a ! -f "${l_target_folder}/.md5sum" \
+			-a ! -f "${l_target_folder}/.crc-md5sum" \
+			-a ! -f "${l_target_folder}/.md5sum.bz2" \
+		] ; then
 			calculate_checksum_for "${l_source_folder}" > "${l_target_folder}/.md5sum.gz"
 		fi
 
