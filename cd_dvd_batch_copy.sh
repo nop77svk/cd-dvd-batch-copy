@@ -211,5 +211,3 @@ while true ; do
 	InfoMessage A short break prior to copying another media
 	sleep 15
 done
-
-:EOF
