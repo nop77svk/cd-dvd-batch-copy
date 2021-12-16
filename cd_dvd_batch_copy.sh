@@ -8,7 +8,7 @@ set -o pipefail
 
 # -------------------------------------------------------------------------------------------------
 
-TARGET_ROOT=/cygdrive/e/cd.copy
+TARGET_ROOT=/cygdrive/e/cd.majus
 SOURCE_DRIVE_LETTER=W
 
 function InfoMessage()
@@ -107,24 +107,66 @@ function calculate_checksum_for()
 
 function check_checksum_in()
 {
-	InfoMessage "Checking checksums in $1"
+	InfoMessage "Checking checksums in $1/$2"
 	(
 		cd "$1"
 		LC_ALL=en_US.cp1250
 		(
-			if [ -f .md5sum.gz ] ; then
-				gzip -dc .md5sum.gz
-			else if [ -f .md5sum.bz2 ] ; then
-				bzip2 -dc .md5sum.bz2
-			else if [ -f .md5sum ] ; then
-				cat .md5sum
-			else if [ -f .crc-md5sum ] ; then
-				cat .crc-md5sum
-			fi ; fi ; fi ; fi
+			if [ "${2: -3}" = ".gz" ] ; then
+				gzip -dc "$2"
+			else if [ "${2: -4}" = ".bz2" ] ; then
+				bzip2 -dc "$2"
+			else
+				cat "$2"
+			fi ; fi
 		) \
 			| md5sum -c \
 			|| ThrowException "Checksums mismatch!"
 	)
+}
+
+function find_checksum_file()
+{
+	declare -n o_find_checksum_file=$1
+	o_find_checksum_file=
+
+	for fname in md5sum crc-md5sum checksum crc ; do
+		for fext in gz bz2 ; do
+			if [ -f .${fname}.${fext} ] ; then
+				o_find_checksum_file=.${fname}.${fext}
+				break;
+			else if [ -f ${fname}.${fext} ] ; then
+				o_find_checksum_file=${fname}.${fext}
+				break;
+			fi ; fi
+		done
+
+		if [ -n "${o_find_checksum_file:-}" ] ; then
+			break;
+		else if [ -f .${fname} ] ; then
+			o_find_checksum_file=.${fname}
+			break;
+		else if [ -f ${fname} ] ; then
+			o_find_checksum_file=${fname}
+			break;
+		fi ; fi ; fi
+	done
+
+	o_find_checksum_file=${o_find_checksum_file:-}
+}
+
+function find_checksum_file_in()
+{
+	declare -n o_find_checksum_file_in=$2
+	o_find_checksum_file_in=
+	
+	(
+		InfoMessage "Finding checksum file in $1"
+		cd "$1"
+		find_checksum_file o_find_checksum_file_in
+	)
+
+	o_find_checksum_file_in=${o_find_checksum_file_in:-}
 }
 
 # -------------------------------------------------------------------------------------------------
@@ -147,17 +189,17 @@ while true ; do
 	mkdir "${l_target_folder}" 2> /dev/null || InfoMessage Target directory already exists
 
 	while true ; do
-		copy_media "${l_source_folder}" "${l_target_folder}"
+		while ! copy_media "${l_source_folder}" "${l_target_folder}" ; do
+			InfoMessage "Retrying..."
+		done
 
-		if [ ! -f "${l_target_folder}/.md5sum.gz" \
-			-a ! -f "${l_target_folder}/.md5sum" \
-			-a ! -f "${l_target_folder}/.crc-md5sum" \
-			-a ! -f "${l_target_folder}/.md5sum.bz2" \
-		] ; then
-			calculate_checksum_for "${l_source_folder}" > "${l_target_folder}/.md5sum.gz"
+		find_checksum_file_in "${l_target_folder}" l_checksum_file
+		if [ -z "${l_checksum_file:-}" ] ; then
+			l_checksum_file=.md5sum.gz
+			calculate_checksum_for "${l_source_folder}" > "${l_target_folder}/${l_checksum_file}"
 		fi
 
-		if check_checksum_in "${l_target_folder}" ; then
+		if check_checksum_in "${l_target_folder}" "${l_checksum_file}" ; then
 			break
 		else
 			InfoMessage Retrying
