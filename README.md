@@ -1,5 +1,9 @@
 # Various shell scripts of mine
 
+In order to make one's life easier the one should automate most of the mundane tasks he/she encounters.
+
+That's what I've been doing for the past 35 years. :-)
+
 ## cd_dvd_batch_copy.sh
 
 Hassle-free copying of old CD/DVD backups back to backup disk(s). What does it do:
