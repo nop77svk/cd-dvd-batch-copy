@@ -8,7 +8,7 @@ set -o pipefail
 
 # -------------------------------------------------------------------------------------------------
 
-TARGET_ROOT=/cygdrive/e/cd.majus
+TARGET_ROOT=/cygdrive/e/cd.copy
 SOURCE_DRIVE_LETTER=W
 
 function InfoMessage()
@@ -51,7 +51,7 @@ function get_media_volume_info()
 {
 	declare -n o_result=$1
 	InfoMessage Retrieving CD/DVD media information
-	eval $( wmic cdrom list full | tr -d '\r' | grep -E '^(VolumeName|VolumeSerialNumber)=' | sed "s/=\(.*\)$/='\1'/gi" )
+	eval $( wmic cdrom list full | tr -d '\r' | grep -E '^(VolumeName|VolumeSerialNumber)=' | tr "/'" "--" | sed "s/=\(.*\)$/='\1'/gi" )
 	o_result="${VolumeSerialNumber}"
 	if [ -n "${VolumeName}" ] ; then
 		o_result="${o_result} ${VolumeName}"
@@ -76,11 +76,24 @@ function copy_media()
 {
 	InfoMessage "Copying from $1 to $2"
 	(
+		cd "$2"
+		attrib -r -s -h -i /s /d
+	)
+
+	(
 		cd "$1"
 		rsync -rWP --size-only \
 			. \
 			"$2"
 	)
+	l_rsync_status=$?
+
+	(
+		cd "$2"
+		attrib -r -s -h -i /s /d
+	)
+
+	return ${l_rsync_status}
 }
 
 function wait_for_media_inserted()
@@ -111,6 +124,7 @@ function check_checksum_in()
 	(
 		cd "$1"
 		LC_ALL=en_US.cp1250
+
 		(
 			if [ "${2: -3}" = ".gz" ] ; then
 				gzip -dc "$2"
@@ -120,6 +134,7 @@ function check_checksum_in()
 				cat "$2"
 			fi ; fi
 		) \
+			| grep -vF "/$2" \
 			| md5sum -c \
 			|| ThrowException "Checksums mismatch!"
 	)
@@ -128,45 +143,60 @@ function check_checksum_in()
 function find_checksum_file()
 {
 	declare -n o_find_checksum_file=$1
+	declare -n o_find_checksum_folder=$2
+
 	o_find_checksum_file=
+	o_find_checksum_folder=
 
-	for fname in md5sum crc-md5sum checksum crc ; do
-		for fext in gz bz2 ; do
-			if [ -f .${fname}.${fext} ] ; then
-				o_find_checksum_file=.${fname}.${fext}
+	for subfolder in . .nop ; do
+		for fname in md5sum crc-md5sum checksum crc ; do
+			for fext in gz bz2 ; do
+				if [ -f ${subfolder}/.${fname}.${fext} ] ; then
+					o_find_checksum_folder=${subfolder}
+					o_find_checksum_file=.${fname}.${fext}
+					break;
+				else if [ -f ${subfolder}/${fname}.${fext} ] ; then
+					o_find_checksum_folder=${subfolder}
+					o_find_checksum_file=${fname}.${fext}
+					break;
+				fi ; fi
+			done
+
+			if [ -n "${o_find_checksum_file:-}" ] ; then
 				break;
-			else if [ -f ${fname}.${fext} ] ; then
-				o_find_checksum_file=${fname}.${fext}
+			else if [ -f ${subfolder}/.${fname} ] ; then
+				o_find_checksum_folder=${subfolder}
+				o_find_checksum_file=.${fname}
 				break;
-			fi ; fi
+			else if [ -f ${subfolder}/${fname} ] ; then
+				o_find_checksum_folder=${subfolder}
+				o_find_checksum_file=${fname}
+				break;
+			fi ; fi ; fi
 		done
-
-		if [ -n "${o_find_checksum_file:-}" ] ; then
-			break;
-		else if [ -f .${fname} ] ; then
-			o_find_checksum_file=.${fname}
-			break;
-		else if [ -f ${fname} ] ; then
-			o_find_checksum_file=${fname}
-			break;
-		fi ; fi ; fi
 	done
 
+	o_find_checksum_folder=${o_find_checksum_folder:-}
 	o_find_checksum_file=${o_find_checksum_file:-}
 }
 
 function find_checksum_file_in()
 {
 	declare -n o_find_checksum_file_in=$2
-	o_find_checksum_file_in=
-	
-	(
-		InfoMessage "Finding checksum file in $1"
-		cd "$1"
-		find_checksum_file o_find_checksum_file_in
-	)
+	declare -n o_find_checksum_folder_in=$3
 
+	o_find_checksum_file_in=
+	o_find_checksum_folder_in=
+
+	l_here=$PWD	
+	InfoMessage "Finding checksum file in $1"
+	cd "$1"
+	find_checksum_file o_find_checksum_file_in o_find_checksum_folder_in
+	cd "${l_here}"
+
+	o_find_checksum_folder_in=${o_find_checksum_folder_in:-}
 	o_find_checksum_file_in=${o_find_checksum_file_in:-}
+	InfoMessage "    Found: ${o_find_checksum_folder_in}/${o_find_checksum_file_in}"
 }
 
 # -------------------------------------------------------------------------------------------------
@@ -193,16 +223,21 @@ while true ; do
 			InfoMessage "Retrying..."
 		done
 
-		find_checksum_file_in "${l_target_folder}" l_checksum_file
+		find_checksum_file_in "${l_target_folder}" l_checksum_file l_checksum_file_folder
 		if [ -z "${l_checksum_file:-}" ] ; then
 			l_checksum_file=.md5sum.gz
+			l_checksum_file_folder=.
 			calculate_checksum_for "${l_source_folder}" > "${l_target_folder}/${l_checksum_file}"
 		fi
 
-		if check_checksum_in "${l_target_folder}" "${l_checksum_file}" ; then
-			break
+		if [ -n "${l_checksum_file:-}" ] ; then
+			if check_checksum_in "${l_target_folder}/${l_checksum_file_folder}" "${l_checksum_file}" ; then
+				break
+			else
+				InfoMessage Retrying
+			fi
 		else
-			InfoMessage Retrying
+			break
 		fi
 	done
 
