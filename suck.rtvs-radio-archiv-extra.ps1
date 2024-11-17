@@ -1,10 +1,12 @@
 $ErrorActionPreference = 'Stop'
 $WarningPreference = 'Continue'
 $InformationPreference = 'Continue'
-$DebugPreference = 'SilentlyContinue'
+$DebugPreference = 'Continue'
+#$DebugPreference = 'SilentlyContinue'
 
 class SourceDefinition
 {
+    [string] $Id
 	[string] $Name
     [string] $URI
 }
@@ -13,36 +15,40 @@ $SourceBaseUri = 'https://www.rtvs.sk'
 
 $SourceDefinitions = @(
     [SourceDefinition]@{
+        Id = 'rozhlasove-hry';
         Name = 'Rozhlasové hry';
         URI = '/radio/archiv/extra/rozhlasove-hry'
     },
     [SourceDefinition]@{
+        Id = 'rozpravky';
         Name = 'Rozprávky';
         URI = '/radio/archiv/extra/rozpravky'
     },
     [SourceDefinition]@{
+        Id = 'citanie-na-pokracovanie';
         Name = 'Čítanie na pokračovanie';
         URI = '/radio/archiv/extra/citanie-na-pokracovanie'
     }
 )
 
-function Scrape-TheSources()
+function Read-TheSources()
 {
 	param (
 		[Parameter(Mandatory, ValueFromPipeline)]
-		$input
+		$data
 	)
 
 	process
 	{
-		Write-Information "[SOURCE] $( $input.Name )"
+        $dataRow = $_
+		Write-Information "[SOURCE] $( $dataRow.Name )"
 
-	    $classRootPageUri = "$SourceBaseUri$( $input.URI )"
+	    $classRootPageUri = "$SourceBaseUri$( $dataRow.URI )"
 	    Write-Debug "[GET] $classRootPageUri"
 
 	    $classRootPage = Invoke-WebRequest -Uri $classRootPageUri -Method Get
 
-	    $classRootPage.Links
+	    $result = $classRootPage.Links
 	        | Where-Object { $_.class -eq 'page-link' -and $_.id -eq 'pageSwitcher' }
 	        | Select-Object -ExpandProperty href
 	        | Select-String -Pattern '[?&]page=(\d+)'
@@ -52,104 +58,245 @@ function Scrape-TheSources()
 	        }}
 	        | Sort-Object -Descending PageIx
 	        | Select-Object -First 1
-			| %{ [PSCustomObject]@{
-				SourceDef = $input;
-				LastPageDesc = $_
+			| ForEach-Object { [PSCustomObject]@{
+				Source = $dataRow;
+				LastPage = $_
 			}}
+        
+        $result
 	}
 }
 
-function Scrape-TheSourcePaging()
+function Select-Paging()
 {
 	param (
 		[Parameter(Mandatory, ValueFromPipeline)]
-		$input
+		$data
+	)
+
+    process
+    {
+        $dataRow = $_
+
+	    for ([int]$pageIx = 1; $pageIx -le $dataRow.LastPage.PageIx; $pageIx++)
+	    {
+	        Write-Information "[SOURCE PAGE] $pageIx"
+
+	        $rootSubpageRelativeUri = $dataRow.LastPage.HRef -replace $dataRow.LastPage.PageIx,$pageIx
+	        $rootSubpageUri = "$SourceBaseUri$rootSubpageRelativeUri"
+
+            $result = [PSCustomObject]@{
+                Source = $dataRow.Source;
+                Page = [PSCustomObject]@{
+                    Index = $pageIx;
+                    LastIndex = $dataRow.LastPage.PageIx
+                    Uri = $rootSubpageUri;
+                }
+            }
+
+            $result
+        }
+    }
+}
+
+class SingleSeriesLink
+{
+    [string] $Id
+    [string] $Title
+    [string] $PageHref
+    [string] $IFrameHref
+    [string] $AudioJsonUri
+    [int] $MediaSourceId
+    [string] $MediaSourceMimeType
+    [string] $MediaSourceUri
+
+    [SingleSeriesLink] WithIFrameHref([string] $uri)
+    {
+        $this.IFrameHref = $uri
+        return $this
+    }
+
+    [SingleSeriesLink] WithAudioJsonUri([string] $uri)
+    {
+        $this.AudioJsonUri = $uri
+        return $this
+    }
+
+    [SingleSeriesLink] WithMediaSource([int] $id, [string] $mimeType, [string] $uri)
+    {
+        $this.MediaSourceId = $id
+        $this.MediaSourceMimeType = $mimeType
+        $this.MediaSourceUri = $uri
+        return $this;
+    }
+
+    [string] GetMediaFileExtension()
+    {
+        $result = switch ($this.MediaSourceMimeType)
+        {
+            'audio/mp3' { 'mp3' }
+            default { 'bin' }
+        }
+
+        return $result
+    }
+
+    [string] GetOutputFileName()
+    {
+        $fileBaseName = $this.Title
+        $fileSuffix = $this.MediaSourceId.ToString()
+        $fileExtension = $this.GetMediaFileExtension()
+
+        $result = "$fileBaseName.part-$fileSuffix.$fileExtension"
+
+        return $result
+    }
+}
+
+function Read-TheSourcePaging()
+{
+	param (
+		[Parameter(Mandatory, ValueFromPipeline)]
+		$data
 	)
 
 	process
 	{
-	    for ([int]$pageIx = 1; $pageIx -le $input.LastPageDesc.PageIx; $pageIx++)
-	    {
-	        Write-Information "[PAGE NO] $pageIx"
+        $dataRow = $_
 
-	        $rootSubpageRelativeUri = $input.LastPageDesc.HRef -replace $input.LastPageDesc.PageIx,$pageIx
-	        $rootSubpageUri = "$SourceBaseUri$rootSubpageRelativeUri"
+        Write-Debug "[GET] $( $dataRow.Page.Uri )"
+        $rootSubpage = Invoke-WebRequest -Uri $dataRow.Page.Uri -Method Get
 
-	        Write-Debug "[GET] $rootSubpageUri"
-	        $rootSubpage = Invoke-WebRequest -Uri $rootSubpageUri -Method Get
-
-	        $rootSubpage.Links
-	            | Where-Object { $_.class -eq 'list--radio-series__link' -and -not [string]::IsNullOrEmpty($_.title) }
-				| %{ [PSCustomObject]@{
-					SourceDef = $input.SourceDef;
-					LastPageDesc = $input.LastPageDesc;
-					SingleSeriesLink = [PSCustomObject]@{
-						Title = $_.title;
-						Href = $_.href
-					}
-				}}
-		}
+        $result = $rootSubpage.Links
+            | Where-Object { $_.class -eq 'list--radio-series__link' -and -not [string]::IsNullOrEmpty($_.title) }
+            | ForEach-Object { [PSCustomObject]@{
+                Source = $dataRow.Source;
+                Page = $dataRow.Page;
+                SingleSeriesLink = [SingleSeriesLink]@{
+                    Id = $_.href -replace '^.*/(\d+)/(\d+)$','$1-$2'
+                    Title = $_.title
+                    PageHref = $_.href
+                }
+            }}
+        
+        $result
 	}
 }
-	
+
+function Read-TheSeriesLinks()
+{
+	param (
+		[Parameter(Mandatory, ValueFromPipeline)]
+		$data
+	)
+
+	process
+	{
+        $dataRow = $_
+
+        Write-Information "[SERIES] $( $dataRow.SingleSeriesLink.Title )"
+        $seriesPartPageUri = "$SourceBaseUri$( $dataRow.SingleSeriesLink.PageHref )"
+
+        Write-Debug "[GET] $seriesPartPageUri"
+        $seriesPartPage = Invoke-WebRequest -Uri $seriesPartPageUri -Method Get
+
+        $iframeHtmls = $seriesPartPage.Content -split "`n"
+            | ForEach-Object { $_.Trim() }
+            | Select-String -Pattern '<iframe[^>]*\s+id\s*=\s*"player_audio_\d+"[^>]*>'
+        
+        $iframeHrefs = $iframeHtmls
+            | ForEach-Object { $_.Matches[0] }
+            | Select-Object -ExpandProperty Value
+            | Select-String -Pattern 'src\s*=\s*"([^"]*)"'
+            | ForEach-Object { $_.Matches[0].Groups[1] }
+            | Select-Object -ExpandProperty Value
+
+        $result = $iframeHrefs
+            | ForEach-Object { [PSCustomObject]@{
+                Source = $dataRow.Source;
+                Page = $dataRow.Page;
+                SingleSeriesLink = $dataRow.SingleSeriesLink.WithIFrameHref($iframeHrefs)
+            }}
+        
+        $result
+    }
+}
+
+function Read-TheAudioIFrames()
+{
+    param (
+        [Parameter(Mandatory, ValueFromPipeline)]
+        $data
+    )
+
+    process
+    {
+        $dataRow = $_
+
+        $singleAudioIframeUri = $dataRow.SingleSeriesLink.IFrameHref
+        Write-Debug "[GET] $singleAudioIframeUri"
+        $audioIframePage = Invoke-WebRequest -Uri $singleAudioIframeUri -Method Get
+
+        $audioJsonUris = $audioIframePage.Content -split "`n"
+            | Select-String -Pattern '[^"]+\.json\?id=\d+'
+            | ForEach-Object { $_.Matches[0].Value }
+            | ForEach-Object { $_ -like '//*' ? "https:$_" : $_ }
+
+        $result = $audioJsonUris
+            | ForEach-Object { [PSCustomObject]@{
+                Source = $dataRow.Source;
+                Page = $dataRow.Page;
+                SingleSeriesLink = $dataRow.SingleSeriesLink.WithAudioJsonUri($_)
+            }}
+
+        $result
+    }
+}
+
+function Read-TheAudioJsons()
+{
+    param (
+        [Parameter(Mandatory, ValueFromPipeline)]
+        $data
+    )
+
+    process
+    {
+        $dataRow = $_
+
+        $singleJsonUri = $dataRow.SingleSeriesLink.AudioJsonUri
+        Write-Debug "[GET] $singleJsonUri"
+        $audioJson = Invoke-RestMethod -Uri $singleJsonUri -Method Get
+
+        $playlistItemId = 0
+        $mediaSourceItemId = 0
+        $result = $audioJson.playlist
+            | ForEach-Object { $playlistItemId++; Write-Debug "[PLAYLIST ITEM $playlistItemId] $_"; $_ }
+            | Select-Object -ExpandProperty sources
+            | ForEach-Object { $mediaSourceItemId++; Write-Debug "[MEDIA SOURCE $mediaSourceItemId] $_"; $_ }
+            | ForEach-Object { [PSCustomObject]@{
+                Source = $dataRow.Source;
+                Page = $dataRow.Page;
+                SingleSeriesLink = $dataRow.SingleSeriesLink.WithMediaSource($mediaSourceItemId, $_.type, $_.src)
+            }}
+
+        $result
+    }
+}
 
 $SourceDefinitions
-	| Scrape-TheSources
-	| Scrape-TheSourcePaging
-	| Scrape-TheSeriesLinks
-<#    
-        foreach ($singleSeriesLink in $seriesLinks)
-        {
-            Write-Information "[SERIES] $( $singleSeriesLink.title )"
-            $seriesPartPageUri = "$SourceBaseUri$( $singleSeriesLink.href )"
+	| Read-TheSources
+    | Select-Paging
+	| Read-TheSourcePaging
+	| Read-TheSeriesLinks
+    | Read-TheAudioIFrames
+    | Read-TheAudioJsons
+    | ForEach-Object {
+        $mediaUri = $_.SingleSeriesLink.MediaSourceUri
+        Write-Debug "[GET] $mediaUri"
 
-            Write-Debug "[GET] $seriesPartPageUri"
-            $seriesPartPage = Invoke-WebRequest -Uri $seriesPartPageUri -Method Get
+        $mediaOutputFileName = $_.SingleSeriesLink.GetOutputFileName()
+        Write-Debug "[OUTPUT] $mediaOutputFileName"
 
-            $audioIframeUris = $seriesPartPage.RawContent -split "`n"
-                | Select-String -Pattern '<iframe[^>]*\s+id\s*=\s*"player_audio_\d+"[^>]*>'
-                | %{ $_.Matches[0] }
-                | Select-Object -ExpandProperty Value
-                | Select-String -Pattern 'src\s*=\s*"([^"]*)"'
-                | %{ $_.Matches[0].Groups[1] }
-                | Select-Object -ExpandProperty Value
-            
-            foreach ($singleAudioIframeUri in $audioIframeUris)
-            {
-                Write-Debug "[GET] $singleAudioIframeUri"
-                $audioIframePage = Invoke-WebRequest -Uri $singleAudioIframeUri -Method Get
-
-                $audioJsonRelativeUris = $audioIframePage.RawContent -split "`n"
-                    | Select-String -Pattern '[^"]+\.json\?id=\d+'
-                    | %{ $_.Matches[0].Value }
-
-                foreach ($singleJsonUri in $audioJsonRelativeUris)
-                {
-                    if ($singleJsonUri -like '//*')
-                    {
-                        $singleJsonUri = "https:$singleJsonUri"
-                    }
-
-                    Write-Debug "[GET] $singleJsonUri"
-                    $audioJson = Invoke-RestMethod -Uri $singleJsonUri -Method Get
-
-                    foreach ($mediaFile in $audioJson.playlist)
-                    {
-                        Write-Debug "[PLAYLIST ITEM] $mediaFile"
-
-                        $sourceNo = 0
-                        foreach ($mediaSource in $mediaFile.sources)
-                        {
-                            Write-Debug "[SOURCE $sourceNo] $mediaSource"
-
-                            $fileName = "e:\$( $singleSeriesLink.title ).part-$sourceNo.mp3" # decide extension based on mime type in the .type property
-                            Write-Debug "[OUTPUT] $fileName"
-
-                            Invoke-WebRequest -Uri $mediaSource.src -Method Get -OutFile $fileName
-                        }
-                    }
-                }
-            }
-        }
+        Invoke-WebRequest -Uri $mediaUri -Method Get -OutFile $mediaOutputFileName
     }
-#>
