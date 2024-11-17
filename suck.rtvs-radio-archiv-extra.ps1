@@ -26,39 +26,78 @@ $SourceDefinitions = @(
     }
 )
 
-foreach ($sourceDef in $SourceDefinitions)
+function Scrape-TheSources()
 {
-    Write-Information "[SOURCE] $( $sourceDef.Name )"
+	param (
+		[Parameter(Mandatory, ValueFromPipeline)]
+		$input
+	)
 
-    $classRootPageUri = "$SourceBaseUri$( $sourceDef.URI )"
+	process
+	{
+		Write-Information "[SOURCE] $( $input.Name )"
 
-    Write-Debug "[GET] $classRootPageUri"
-    $classRootPage = Invoke-WebRequest -Uri $classRootPageUri -Method Get
+	    $classRootPageUri = "$SourceBaseUri$( $input.URI )"
+	    Write-Debug "[GET] $classRootPageUri"
 
-    $lastPage = $classRootPage.Links
-        | Where-Object { $_.class -eq 'page-link' -and $_.id -eq 'pageSwitcher' }
-        | Select-Object -ExpandProperty href
-        | Select-String -Pattern '[?&]page=(\d+)'
-        | ForEach-Object {[PSCustomObject]@{
-            HRef = $_.Line
-            PageIx = [int]$_.Matches.Groups[1].Captures[0].Value
-        }}
-        | Sort-Object -Descending PageIx
-        | Select-Object -First 1
-    
-    for ([int]$pageIx = 1; $pageIx -le $lastPage.PageIx; $pageIx++)
-    {
-        Write-Information "[PAGE NO] $pageIx"
+	    $classRootPage = Invoke-WebRequest -Uri $classRootPageUri -Method Get
 
-        $rootSubpageRelativeUri = $lastPage.HRef -replace $lastPage.PageIx,$pageIx
-        $rootSubpageUri = "$SourceBaseUri$rootSubpageRelativeUri"
+	    $classRootPage.Links
+	        | Where-Object { $_.class -eq 'page-link' -and $_.id -eq 'pageSwitcher' }
+	        | Select-Object -ExpandProperty href
+	        | Select-String -Pattern '[?&]page=(\d+)'
+	        | ForEach-Object {[PSCustomObject]@{
+	            HRef = $_.Line
+	            PageIx = [int]$_.Matches.Groups[1].Captures[0].Value
+	        }}
+	        | Sort-Object -Descending PageIx
+	        | Select-Object -First 1
+			| %{ [PSCustomObject]@{
+				SourceDef = $input;
+				LastPageDesc = $_
+			}}
+	}
+}
 
-        Write-Debug "[GET] $rootSubpageUri"
-        $rootSubpage = Invoke-WebRequest -Uri $rootSubpageUri -Method Get
+function Scrape-TheSourcePaging()
+{
+	param (
+		[Parameter(Mandatory, ValueFromPipeline)]
+		$input
+	)
 
-        $seriesLinks = $rootSubpage.Links
-            | Where-Object { $_.class -eq 'list--radio-series__link' -and -not [string]::IsNullOrEmpty($_.title) }
-    
+	process
+	{
+	    for ([int]$pageIx = 1; $pageIx -le $input.LastPageDesc.PageIx; $pageIx++)
+	    {
+	        Write-Information "[PAGE NO] $pageIx"
+
+	        $rootSubpageRelativeUri = $input.LastPageDesc.HRef -replace $input.LastPageDesc.PageIx,$pageIx
+	        $rootSubpageUri = "$SourceBaseUri$rootSubpageRelativeUri"
+
+	        Write-Debug "[GET] $rootSubpageUri"
+	        $rootSubpage = Invoke-WebRequest -Uri $rootSubpageUri -Method Get
+
+	        $rootSubpage.Links
+	            | Where-Object { $_.class -eq 'list--radio-series__link' -and -not [string]::IsNullOrEmpty($_.title) }
+				| %{ [PSCustomObject]@{
+					SourceDef = $input.SourceDef;
+					LastPageDesc = $input.LastPageDesc;
+					SingleSeriesLink = [PSCustomObject]@{
+						Title = $_.title;
+						Href = $_.href
+					}
+				}}
+		}
+	}
+}
+	
+
+$SourceDefinitions
+	| Scrape-TheSources
+	| Scrape-TheSourcePaging
+	| Scrape-TheSeriesLinks
+<#    
         foreach ($singleSeriesLink in $seriesLinks)
         {
             Write-Information "[SERIES] $( $singleSeriesLink.title )"
@@ -113,4 +152,4 @@ foreach ($sourceDef in $SourceDefinitions)
             }
         }
     }
-}
+#>
