@@ -1,8 +1,77 @@
+param (
+	[string] $OutputPath
+)
+
 $ErrorActionPreference = 'Stop'
 $WarningPreference = 'Continue'
 $InformationPreference = 'Continue'
-$DebugPreference = 'Continue'
-#$DebugPreference = 'SilentlyContinue'
+#$DebugPreference = 'Continue'
+$DebugPreference = 'SilentlyContinue'
+
+$SourceBaseUri = 'https://www.rtvs.sk'
+$MaxConcurrentDownloads = 1 * ${env:NUMBER_OF_PROCESSORS}
+
+# ------------------------------------------------------------------------------------------------
+
+if ($null -eq $OutputPath)
+{
+	$OutputPath = Join-Path ${env:USERPROFILE} "Documents"
+}
+
+$MediaInfoStoragePath = Join-Path $OutputPath "suck.rtvs-radio-archiv-extra.json"
+
+class MediaInfoItem
+{
+    [string] $Id
+    [DateTime] $Created
+    [DateTime] $Updated
+    [string] $Title
+}
+
+[hashtable]$global:MediaInfoStorage = $null
+
+function Write-FullIdToStorage([string] $id, [string] $name)
+{
+    if ($null -eq $global:MediaInfoStorage)
+    {
+        if ([System.IO.File]::Exists($MediaInfoStoragePath))
+        {
+            $global:MediaInfoStorage = @{}
+            Get-Content $MediaInfoStoragePath
+                | ConvertFrom-Json
+                | ForEach-Object { $global:MediaInfoStorage[$_.Id] = $_ }
+        }
+
+        if ($null -eq $global:MediaInfoStorage)
+        {
+            $global:MediaInfoStorage = @{}
+        }
+    }
+
+    $item = $global:MediaInfoStorage[$id]
+    if ($null -eq $item)
+    {
+        $item = [MediaInfoItem]@{
+            Created = [datetime]::Now
+        }
+    }
+    else
+    {
+        [MediaInfoItem]$item = $item
+    }
+
+    $item.Id = $id
+    $item.Updated = [datetime]::Now
+    $item.Title = $title
+
+    $global:MediaInfoStorage[$id] = $item
+
+    $global:MediaInfoStorage.GetEnumerator()
+        | Select-Object -ExpandProperty Value
+        | Sort-Object -Property Created
+        | ConvertTo-Json
+        | Set-Content -Path $MediaInfoStoragePath
+}
 
 class SourceDefinition
 {
@@ -10,8 +79,6 @@ class SourceDefinition
 	[string] $Name
     [string] $URI
 }
-
-$SourceBaseUri = 'https://www.rtvs.sk'
 
 $SourceDefinitions = @(
     [SourceDefinition]@{
@@ -78,7 +145,7 @@ function Select-Paging()
     {
         $dataRow = $_
 
-	    for ([int]$pageIx = 1; $pageIx -le $dataRow.LastPage.PageIx; $pageIx++)
+	    for ([int]$pageIx = $dataRow.LastPage.PageIx; $pageIx -gt 0; $pageIx--)
 	    {
 	        Write-Information "[SOURCE PAGE] $pageIx"
 
@@ -88,8 +155,8 @@ function Select-Paging()
             $result = [PSCustomObject]@{
                 Source = $dataRow.Source;
                 Page = [PSCustomObject]@{
-                    Index = $pageIx;
-                    LastIndex = $dataRow.LastPage.PageIx
+                    Id = $pageIx;
+                    LastId = $dataRow.LastPage.PageIx
                     Uri = $rootSubpageUri;
                 }
             }
@@ -143,11 +210,11 @@ class SingleSeriesLink
 
     [string] GetOutputFileName()
     {
-        $fileBaseName = $this.Title
+        $fileBaseName = $this.Title.Replace('/','--').Replace('?','_').Replace(':',' - ').Trim() -replace '\s+',' '
         $fileSuffix = $this.MediaSourceId.ToString()
         $fileExtension = $this.GetMediaFileExtension()
 
-        $result = "$fileBaseName.part-$fileSuffix.$fileExtension"
+        $result = "$fileBaseName [$fileSuffix].$fileExtension"
 
         return $result
     }
@@ -284,19 +351,48 @@ function Read-TheAudioJsons()
     }
 }
 
-$SourceDefinitions
-	| Read-TheSources
+
+$jobs = $SourceDefinitions
+    | Read-TheSources
     | Select-Paging
-	| Read-TheSourcePaging
-	| Read-TheSeriesLinks
+    | Read-TheSourcePaging
+    | Read-TheSeriesLinks
     | Read-TheAudioIFrames
     | Read-TheAudioJsons
+    | Select-Object -First 10
     | ForEach-Object {
-        $mediaUri = $_.SingleSeriesLink.MediaSourceUri
-        Write-Debug "[GET] $mediaUri"
+        $mediaSourceFullId = "$( $_.Source.Id ).$( $_.SingleSeriesLink.Id ).$( $_.SingleSeriesLink.MediaSourceId )"
 
-        $mediaOutputFileName = $_.SingleSeriesLink.GetOutputFileName()
-        Write-Debug "[OUTPUT] $mediaOutputFileName"
+        if ($null -ne $global:MediaInfoStorage -and $global:MediaInfoStorage.ContainsKey($mediaSourceFullId))
+        {
+            Write-Warning "[ALREADY DOWNLOADED] $mediaSourceFullId"
+        }
+        else
+        {
+            Write-Debug "[MEDIA SOURCE FULL ID] $mediaSourceFullId"
 
-        Invoke-WebRequest -Uri $mediaUri -Method Get -OutFile $mediaOutputFileName
+            $jobBody = {
+                param (
+                    [string] $mediaSourceUri,
+                    [string] $mediaOutputFileName,
+                    [string] $mediaSourceFullId,
+                    [string] $title
+                )
+
+                Write-Debug "[GET] $mediaSourceUri"
+                Write-Debug "[OUTPUT] $mediaOutputFileName"
+
+                Invoke-WebRequest -Uri $mediaSourceUri -Method Get -OutFile $mediaOutputFileName
+
+                Write-FullIdToStorage -id $mediaSourceFullId -title $title
+            }
+
+            New-Item -Path $OutputPath -Name $_.Source.Id -Force -ItemType Directory
+            $mediaOutputFileName = Join-Path $OutputPath $_.Source.Id $_.SingleSeriesLink.GetOutputFileName()
+
+            # Start-ThreadJob -ThrottleLimit $MaxConcurrentDownloads -Name $mediaSourceFullId -ArgumentList "e:",$_.SingleSeriesLink -ScriptBlock $jobBody
+            Invoke-Command -ScriptBlock $jobBody -ArgumentList $_.SingleSeriesLink.MediaSourceUri,$mediaOutputFileName,$mediaSourceFullId,$_.SingleSeriesLink.Title
+        }
     }
+
+# Receive-Job -Job $jobs -AutoRemoveJob -Wait
