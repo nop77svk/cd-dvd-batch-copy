@@ -9,11 +9,11 @@ $InformationPreference = 'Continue'
 $DebugPreference = 'SilentlyContinue'
 
 $SourceBaseUri = 'https://www.rtvs.sk'
-$MaxConcurrentDownloads = 1 * ${env:NUMBER_OF_PROCESSORS}
+$MaxConcurrentDownloads = 2 * ${env:NUMBER_OF_PROCESSORS}
 
 # ------------------------------------------------------------------------------------------------
 
-if ($null -eq $OutputPath)
+if ([string]::IsNullOrWhiteSpace($OutputPath))
 {
 	$OutputPath = Join-Path ${env:USERPROFILE} "Documents"
 }
@@ -351,15 +351,16 @@ function Read-TheAudioJsons()
     }
 }
 
+$jobs = @()
 
-$jobs = $SourceDefinitions
+$SourceDefinitions
     | Read-TheSources
     | Select-Paging
     | Read-TheSourcePaging
     | Read-TheSeriesLinks
     | Read-TheAudioIFrames
     | Read-TheAudioJsons
-    | Select-Object -First 10
+#    | Select-Object -First 10
     | ForEach-Object {
         $mediaSourceFullId = "$( $_.Source.Id ).$( $_.SingleSeriesLink.Id ).$( $_.SingleSeriesLink.MediaSourceId )"
 
@@ -387,12 +388,20 @@ $jobs = $SourceDefinitions
                 Write-FullIdToStorage -id $mediaSourceFullId -title $title
             }
 
-            New-Item -Path $OutputPath -Name $_.Source.Id -Force -ItemType Directory
-            $mediaOutputFileName = Join-Path $OutputPath $_.Source.Id $_.SingleSeriesLink.GetOutputFileName()
+            $outputDirectory = New-Item -Path $OutputPath -Name $_.Source.Id -Force -ItemType Directory
+            $mediaOutputFileName = Join-Path $outputDirectory $_.SingleSeriesLink.GetOutputFileName()
 
-            # Start-ThreadJob -ThrottleLimit $MaxConcurrentDownloads -Name $mediaSourceFullId -ArgumentList "e:",$_.SingleSeriesLink -ScriptBlock $jobBody
-            Invoke-Command -ScriptBlock $jobBody -ArgumentList $_.SingleSeriesLink.MediaSourceUri,$mediaOutputFileName,$mediaSourceFullId,$_.SingleSeriesLink.Title
+            $job = Start-ThreadJob `
+                -ThrottleLimit $MaxConcurrentDownloads `
+                -Name $mediaSourceFullId `
+                -ArgumentList $_.SingleSeriesLink.MediaSourceUri,$mediaOutputFileName,$mediaSourceFullId,$_.SingleSeriesLink.Title `
+                -ScriptBlock $jobBody
+
+            $jobs += $job
+
+            # Invoke-Command -ScriptBlock $jobBody -ArgumentList $_.SingleSeriesLink.MediaSourceUri,$mediaOutputFileName,$mediaSourceFullId,$_.SingleSeriesLink.Title
         }
     }
+Wait-Job -Job $jobs
 
-# Receive-Job -Job $jobs -AutoRemoveJob -Wait
+Receive-Job -Job $jobs -AutoRemoveJob -Wait
