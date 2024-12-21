@@ -1,5 +1,6 @@
 param (
-	[string] $OutputPath
+	[string] $OutputPath = "e:",
+    [bool] $DryRun = $true
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,7 +19,8 @@ if ([string]::IsNullOrWhiteSpace($OutputPath))
 	$OutputPath = Join-Path ${env:USERPROFILE} "Documents"
 }
 
-$MediaInfoStoragePath = Join-Path $OutputPath "suck.rtvs-radio-archiv-extra.json"
+$global:MediaInfoStoragePath = Join-Path $OutputPath "suck.rtvs-radio-archiv-extra.json"
+Write-Information "[REPOSITORY] $MediaInfoStoragePath"
 
 class MediaInfoItem
 {
@@ -30,14 +32,14 @@ class MediaInfoItem
 
 [hashtable]$global:MediaInfoStorage = $null
 
-function Write-FullIdToStorage([string] $id, [string] $name)
+function Write-FullIdToStorage([string] $id, [string] $title)
 {
     if ($null -eq $global:MediaInfoStorage)
     {
-        if ([System.IO.File]::Exists($MediaInfoStoragePath))
+        if ([System.IO.File]::Exists($global:MediaInfoStoragePath))
         {
             $global:MediaInfoStorage = @{}
-            Get-Content $MediaInfoStoragePath
+            Get-Content $global:MediaInfoStoragePath
                 | ConvertFrom-Json
                 | ForEach-Object { $global:MediaInfoStorage[$_.Id] = $_ }
         }
@@ -70,7 +72,7 @@ function Write-FullIdToStorage([string] $id, [string] $name)
         | Select-Object -ExpandProperty Value
         | Sort-Object -Property Created
         | ConvertTo-Json
-        | Set-Content -Path $MediaInfoStoragePath
+        | Set-Content -Path $global:MediaInfoStoragePath
 }
 
 class SourceDefinition
@@ -351,6 +353,8 @@ function Read-TheAudioJsons()
     }
 }
 
+# ------------------------------------------------------------------------------------------------
+
 $jobs = @()
 
 $SourceDefinitions
@@ -383,14 +387,17 @@ $SourceDefinitions
                 Write-Debug "[GET] $mediaSourceUri"
                 Write-Debug "[OUTPUT] $mediaOutputFileName"
 
-                Invoke-WebRequest -Uri $mediaSourceUri -Method Get -OutFile $mediaOutputFileName
+                if (!$DryRun)
+                {
+                    Invoke-WebRequest -Uri $mediaSourceUri -Method Get -OutFile $mediaOutputFileName
+                }
 
                 Write-FullIdToStorage -id $mediaSourceFullId -title $title
             }
 
             $outputDirectory = New-Item -Path $OutputPath -Name $_.Source.Id -Force -ItemType Directory
             $mediaOutputFileName = Join-Path $outputDirectory $_.SingleSeriesLink.GetOutputFileName()
-
+<#
             $job = Start-ThreadJob `
                 -ThrottleLimit $MaxConcurrentDownloads `
                 -Name $mediaSourceFullId `
@@ -398,10 +405,12 @@ $SourceDefinitions
                 -ScriptBlock $jobBody
 
             $jobs += $job
-
-            # Invoke-Command -ScriptBlock $jobBody -ArgumentList $_.SingleSeriesLink.MediaSourceUri,$mediaOutputFileName,$mediaSourceFullId,$_.SingleSeriesLink.Title
+#>
+            Invoke-Command -ScriptBlock $jobBody -ArgumentList $_.SingleSeriesLink.MediaSourceUri,$mediaOutputFileName,$mediaSourceFullId,$_.SingleSeriesLink.Title
         }
     }
+<#
 Wait-Job -Job $jobs
 
 Receive-Job -Job $jobs -AutoRemoveJob -Wait
+#>
